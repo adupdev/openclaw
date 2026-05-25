@@ -157,6 +157,7 @@ export function applyModelDefaults(
 
   const providerConfig = nextCfg.models?.providers;
   if (providerConfig) {
+    const manifestPlugins = options.manifestRegistry?.plugins;
     const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
       const normalizedProvider = normalizeProviderConfigForConfigDefaults({
@@ -181,7 +182,10 @@ export function applyModelDefaults(
       const nextModels = models.map((model) => {
         const raw = model as ModelDefinitionLike;
         let modelMutated = false;
-        const id = normalizeConfiguredProviderCatalogModelId(providerId, raw.id);
+        const id = normalizeConfiguredProviderCatalogModelId(providerId, raw.id, {
+          allowManifestNormalization: manifestPlugins !== undefined,
+          manifestPlugins,
+        });
         if (id !== raw.id) {
           modelMutated = true;
         }

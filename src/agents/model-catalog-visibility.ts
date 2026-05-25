@@ -1,7 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
-import { buildConfiguredModelCatalog, modelKey } from "./model-selection.js";
+import {
+  buildConfiguredModelCatalog,
+  modelKey,
+  type ModelManifestNormalizationContext,
+} from "./model-selection.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
@@ -27,25 +31,30 @@ function dedupeModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEn
   return next;
 }
 
-export async function resolveVisibleModelCatalog(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  defaultProvider: string;
-  defaultModel?: string;
-  agentId?: string;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  view?: ModelCatalogVisibilityView;
-  runtimeAuthDiscovery?: boolean;
-  providerAuthChecker?: ProviderAuthChecker;
-}): Promise<ModelCatalogEntry[]> {
+export async function resolveVisibleModelCatalog(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    defaultProvider: string;
+    defaultModel?: string;
+    agentId?: string;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+    view?: ModelCatalogVisibilityView;
+    runtimeAuthDiscovery?: boolean;
+    providerAuthChecker?: ProviderAuthChecker;
+  } & ModelManifestNormalizationContext,
+): Promise<ModelCatalogEntry[]> {
   if (params.view === "all") {
     return params.catalog;
   }
 
   const buildDefaultVisibleCatalog = async () => {
     const configuredCatalog = sortModelCatalogEntries(
-      buildConfiguredModelCatalog({ cfg: params.cfg }),
+      buildConfiguredModelCatalog({
+        cfg: params.cfg,
+        manifestPlugins: params.manifestPlugins,
+      }),
     );
     const hasAuth =
       params.providerAuthChecker ??
@@ -74,6 +83,7 @@ export async function resolveVisibleModelCatalog(params: {
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
     agentId: params.agentId,
+    manifestPlugins: params.manifestPlugins,
   });
   const defaultVisibleCatalog =
     policy.allowAny || policy.hasProviderWildcards ? await buildDefaultVisibleCatalog() : [];

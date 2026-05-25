@@ -38,6 +38,46 @@ function getLog(): ReturnType<typeof createSubsystemLogger> {
 const OPENROUTER_COMPAT_FREE_ALIAS = "openrouter:free";
 type ModelManifestPlugins = ModelManifestNormalizationContext["manifestPlugins"];
 
+function resolveManifestPluginsForModelNormalization(params: {
+  cfg: OpenClawConfig;
+  allowManifestNormalization?: boolean;
+  manifestPlugins?: ModelManifestPlugins;
+  workspaceDir?: string;
+}): ModelManifestPlugins {
+  if (params.manifestPlugins || params.allowManifestNormalization === false) {
+    return params.manifestPlugins;
+  }
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  if (!workspaceDir) {
+    return (
+      getCurrentPluginMetadataSnapshot({
+        config: params.cfg,
+        env: process.env,
+      })?.plugins ?? []
+    );
+  }
+  return loadManifestMetadataSnapshot({
+    config: params.cfg,
+    workspaceDir,
+    env: process.env,
+  }).plugins;
+}
+
+function needsManifestPluginsForModelNormalization(params: {
+  cfg: OpenClawConfig;
+  defaultModel?: string;
+  fallbackModels?: readonly string[];
+  visibility: Pick<ReturnType<typeof parseConfiguredModelVisibilityEntries>, "exactModelRefs">;
+}): boolean {
+  return (
+    hasConfiguredProviderModelRows(params.cfg) ||
+    Object.keys(params.cfg.agents?.defaults?.models ?? {}).length > 0 ||
+    params.visibility.exactModelRefs.length > 0 ||
+    (params.fallbackModels?.length ?? 0) > 0 ||
+    Boolean(params.defaultModel?.trim())
+  );
+}
+
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
@@ -399,7 +439,10 @@ export function buildModelAliasIndex(
   const byKey = new Map<string, string[]>();
 
   const rawModels = params.cfg.agents?.defaults?.models ?? {};
-  for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
+  const rawModelEntries = Object.entries(rawModels);
+  const manifestPlugins =
+    rawModelEntries.length > 0 ? resolveManifestPluginsForModelNormalization(params) : undefined;
+  for (const [keyRaw, entryRaw] of rawModelEntries) {
     const trimmedKey = keyRaw.trim();
     if (trimmedKey.endsWith("/*") && normalizeProviderId(trimmedKey.slice(0, -2))) {
       continue;
@@ -410,7 +453,7 @@ export function buildModelAliasIndex(
       defaultProvider: params.defaultProvider,
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: params.manifestPlugins,
+      manifestPlugins,
     });
     if (!parsed) {
       continue;
@@ -572,12 +615,13 @@ export function resolveConfiguredModelRef(
   const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
   if (rawModel) {
     const trimmed = rawModel.trim();
+    const manifestPlugins = resolveManifestPluginsForModelNormalization(params);
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
       defaultProvider: params.defaultProvider,
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: params.manifestPlugins,
+      manifestPlugins,
     });
     const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
     const aliasMatch = aliasIndex.byAlias.get(aliasKey);
@@ -592,7 +636,7 @@ export function resolveConfiguredModelRef(
         defaultProvider: params.defaultProvider,
         allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: params.manifestPlugins,
+        manifestPlugins,
       });
       if (openrouterCompatRef) {
         return openrouterCompatRef;
@@ -601,11 +645,11 @@ export function resolveConfiguredModelRef(
       const inferredProvider = inferUniqueProviderFromConfiguredModels({
         cfg: params.cfg,
         model: trimmed,
-        manifestPlugins: params.manifestPlugins,
+        manifestPlugins,
       });
       if (inferredProvider) {
         return normalizeModelRef(inferredProvider, trimmed, {
-          manifestPlugins: params.manifestPlugins,
+          manifestPlugins,
         });
       }
 
@@ -624,7 +668,7 @@ export function resolveConfiguredModelRef(
       aliasIndex,
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: params.manifestPlugins,
+      manifestPlugins,
     });
     if (resolved) {
       return resolved.ref;
@@ -661,20 +705,30 @@ export function buildAllowedModelSetWithFallbacks(
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
 } {
+  const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
+  const manifestPlugins =
+    params.manifestPlugins ??
+    (needsManifestPluginsForModelNormalization({
+      cfg: params.cfg,
+      defaultModel: params.defaultModel,
+      fallbackModels: params.fallbackModels,
+      visibility,
+    })
+      ? resolveManifestPluginsForModelNormalization(params)
+      : undefined);
   const metadata = buildModelCatalogMetadata({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
-    manifestPlugins: params.manifestPlugins,
+    manifestPlugins,
   });
   const configuredCatalog = buildConfiguredModelCatalog({
     cfg: params.cfg,
-    manifestPlugins: params.manifestPlugins,
+    manifestPlugins,
   });
   const catalog = mergeModelCatalogEntries({
     primary: params.catalog,
     secondary: configuredCatalog,
   }).map((entry) => applyModelCatalogMetadata({ entry, metadata }));
-  const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
   const allowAny = !visibility.hasEntries;
   const defaultModel = params.defaultModel?.trim();
   const defaultRef =
@@ -685,7 +739,7 @@ export function buildAllowedModelSetWithFallbacks(
           defaultProvider: params.defaultProvider,
           allowManifestNormalization: params.allowManifestNormalization,
           allowPluginNormalization: params.allowPluginNormalization,
-          manifestPlugins: params.manifestPlugins,
+          manifestPlugins,
         })
       : null;
   const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
@@ -736,7 +790,7 @@ export function buildAllowedModelSetWithFallbacks(
           catalog,
           model: trimmed,
           defaultProvider: params.defaultProvider,
-          manifestPlugins: params.manifestPlugins,
+          manifestPlugins,
         })
       : params.defaultProvider;
     const parsed = parseModelRefWithCompatAlias({
@@ -745,7 +799,7 @@ export function buildAllowedModelSetWithFallbacks(
       defaultProvider,
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: params.manifestPlugins,
+      manifestPlugins,
     });
     if (!parsed) {
       return;
@@ -1158,7 +1212,20 @@ export function createModelVisibilityPolicyWithFallbacks(
   } & ModelManifestNormalizationContext,
 ): ModelVisibilityPolicy {
   const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
-  const allowed = buildAllowedModelSetWithFallbacks(params);
+  const manifestPlugins =
+    params.manifestPlugins ??
+    (needsManifestPluginsForModelNormalization({
+      cfg: params.cfg,
+      defaultModel: params.defaultModel,
+      fallbackModels: params.fallbackModels,
+      visibility,
+    })
+      ? resolveManifestPluginsForModelNormalization(params)
+      : undefined);
+  const allowed = buildAllowedModelSetWithFallbacks({
+    ...params,
+    manifestPlugins,
+  });
   const allowsKey = (key: string): boolean =>
     allowed.allowAny || isModelKeyAllowedBySet(allowed.allowedKeys, key);
   const exactConfiguredKeys = new Set<string>();
@@ -1167,7 +1234,7 @@ export function createModelVisibilityPolicyWithFallbacks(
       cfg: params.cfg,
       raw,
       defaultProvider: params.defaultProvider,
-      manifestPlugins: params.manifestPlugins,
+      manifestPlugins,
     });
     if (key) {
       exactConfiguredKeys.add(key);
@@ -1190,7 +1257,7 @@ export function createModelVisibilityPolicyWithFallbacks(
         allowAny: allowed.allowAny,
         allowedKeys: allowed.allowedKeys,
         allowedCatalog: allowed.allowedCatalog,
-        manifestPlugins: params.manifestPlugins,
+        manifestPlugins,
       }),
     visibleCatalog: ({ catalog, defaultVisibleCatalog, view }) => {
       if (view === "all") {

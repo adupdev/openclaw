@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { applyModelDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -251,6 +252,58 @@ describe("applyModelDefaults", () => {
 
     expect(next.models?.providers?.google?.api).toBe("openai-completions");
     expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
+  });
+
+  it("uses the supplied manifest registry while normalizing configured provider rows", () => {
+    const cfg = {
+      models: {
+        providers: {
+          demo: {
+            baseUrl: "https://demo.example/v1",
+            apiKey: "DEMO_API_KEY",
+            api: "openai-completions",
+            models: [
+              {
+                id: "latest",
+                name: "Demo Latest",
+                input: ["text"],
+                reasoning: false,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 16_384,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const manifestRegistry: Pick<PluginManifestRegistry, "plugins"> = {
+      plugins: [
+        {
+          id: "demo-normalizer",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          origin: "bundled",
+          rootDir: "/plugins/demo-normalizer",
+          source: "/plugins/demo-normalizer/index.js",
+          manifestPath: "/plugins/demo-normalizer/openclaw.plugin.json",
+          modelIdNormalization: {
+            providers: {
+              demo: {
+                prefixWhenBare: "demo",
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const next = applyModelDefaults(cfg, { manifestRegistry });
+
+    expect(next.models?.providers?.demo?.models?.[0]?.id).toBe("demo/latest");
   });
 
   it("normalizes nested retired Gemini ids in proxy provider rows", () => {
