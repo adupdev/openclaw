@@ -2703,7 +2703,7 @@ export async function runCodexAppServerAttempt(
     ...historyMessages,
     buildCodexUserPromptMessage({ ...params, prompt: codexTurnPromptText }),
   ];
-  const codexModelCallBase = () => ({
+  const codexModelCallBaseFields = {
     runId: params.runId,
     callId: codexModelCallId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -2714,31 +2714,26 @@ export async function runCodexAppServerAttempt(
     transport: appServer.start.transport,
     ...hookContextWindowFields,
     trace: codexModelCallTrace,
-  });
-  const codexModelInputContentFields = () => ({
+  };
+  const codexDiagnosticToolDefinitions = codexModelContentCapture.toolDefinitions
+    ? buildCodexDiagnosticToolDefinitions(tools)
+    : undefined;
+  const buildCodexModelCallDiagnosticFields = () => ({
+    ...codexModelCallBaseFields,
     ...(codexModelContentCapture.inputMessages
       ? { inputMessages: buildTurnStartFailureMessages() }
       : {}),
     ...(codexModelContentCapture.systemPrompt
       ? { systemPrompt: buildRenderedCodexDeveloperInstructions() }
       : {}),
-    ...(codexModelContentCapture.toolDefinitions
-      ? {
-          toolDefinitions: tools.map((tool) => ({
-            name: tool.name,
-            description: tool.description,
-            parameters: readCodexDiagnosticToolParameters(tool),
-          })),
-        }
-      : {}),
+    ...(codexDiagnosticToolDefinitions ? { toolDefinitions: codexDiagnosticToolDefinitions } : {}),
   });
   const emitCodexModelCallStarted = () => {
     codexModelCallStartedAt = Date.now();
     codexModelCallStarted = true;
     emitTrustedDiagnosticEvent({
       type: "model.call.started",
-      ...codexModelCallBase(),
-      ...codexModelInputContentFields(),
+      ...buildCodexModelCallDiagnosticFields(),
     });
   };
   const emitCodexModelCallCompleted = (result: EmbeddedRunAttemptResult) => {
@@ -2748,8 +2743,7 @@ export async function runCodexAppServerAttempt(
     codexModelCallTerminalEmitted = true;
     emitTrustedDiagnosticEvent({
       type: "model.call.completed",
-      ...codexModelCallBase(),
-      ...codexModelInputContentFields(),
+      ...buildCodexModelCallDiagnosticFields(),
       durationMs: Math.max(0, Date.now() - codexModelCallStartedAt),
       ...(codexModelCallRequestPayloadBytes !== undefined
         ? { requestPayloadBytes: codexModelCallRequestPayloadBytes }
@@ -2769,8 +2763,7 @@ export async function runCodexAppServerAttempt(
     codexModelCallTerminalEmitted = true;
     emitTrustedDiagnosticEvent({
       type: "model.call.error",
-      ...codexModelCallBase(),
-      ...codexModelInputContentFields(),
+      ...buildCodexModelCallDiagnosticFields(),
       durationMs: Math.max(0, Date.now() - codexModelCallStartedAt),
       errorCategory: fields.failureKind ?? "error",
       ...(fields.failureKind ? { failureKind: fields.failureKind } : {}),
@@ -5274,6 +5267,21 @@ function readCodexDiagnosticToolParameters(tool: {
   parameters?: unknown;
 }): unknown {
   return tool.inputSchema ?? tool.parameters;
+}
+
+function buildCodexDiagnosticToolDefinitions(
+  tools: readonly {
+    name: string;
+    description: string;
+    inputSchema?: unknown;
+    parameters?: unknown;
+  }[],
+) {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: readCodexDiagnosticToolParameters(tool),
+  }));
 }
 
 function buildCodexToolReportEntry(tool: CodexDynamicToolSpec): CodexToolReportEntry {
